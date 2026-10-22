@@ -32,6 +32,8 @@
 #define PAM_SM_SESSION
 
 #include "pam_radius_auth.h"
+#include <unistd.h>
+#include <netdb.h>
 
 #define DPRINT if (debug) _pam_log
 
@@ -550,6 +552,45 @@ static void add_attribute(AUTH_HDR *request, uint8_t type, CONST uint8_t *data, 
 
 	memcpy(p->data, data, length);
 }
+
+/**
+ * Add an add_called_station_id attribute to a RADIUS packet.
+ */
+static void add_called_station_id(AUTH_HDR *request)
+{
+    char hostname[256];
+
+    if (gethostname(hostname, sizeof(hostname)) != 0)
+        return;
+
+    hostname[sizeof(hostname) - 1] = '\0';
+
+    struct addrinfo hints = {0};
+    struct addrinfo *result = NULL;
+
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_flags = AI_CANONNAME;
+
+    if (getaddrinfo(hostname, NULL, &hints, &result) == 0) {
+        if (result != NULL &&
+            result->ai_canonname != NULL &&
+            result->ai_canonname[0] != '\0') {
+            add_attribute(request, PW_CALLED_STATION_ID,
+                (const uint8_t *)result->ai_canonname,
+                strlen(result->ai_canonname));
+            freeaddrinfo(result);
+            return;
+        }
+
+        if (result != NULL)
+            freeaddrinfo(result);
+    }
+
+    /* Если DNS не вернул canonical name, используем hostname системы. */
+    add_attribute(request, PW_CALLED_STATION_ID,
+        (const uint8_t *)hostname, strlen(hostname));
+}
+
 
 /**
  * Add an integer attribute to a RADIUS packet.
@@ -1498,6 +1539,9 @@ PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, UNUSED int flags, int arg
 	PAM_FAIL_CHECK;
 	if (rhost) {
 		add_attribute(request, PW_CALLING_STATION_ID, (const uint8_t *) rhost, strlen(rhost));
+	        /* CALLED_STATION_ID attribute */
+		add_called_station_id(request);
+
 	}
 
 	DPRINT(LOG_DEBUG, "Sending RADIUS request code %d (%s)", request->code, get_packet_name(request->code));
@@ -1565,6 +1609,9 @@ PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, UNUSED int flags, int arg
 
 		if (rhost) {
 			add_attribute(request, PW_CALLING_STATION_ID, (const uint8_t *) rhost, strlen(rhost));
+			
+			/* CALLED_STATION_ID attribute */
+			add_called_station_id(request);
 		}
 
 		/* copy the state over from the servers response */
